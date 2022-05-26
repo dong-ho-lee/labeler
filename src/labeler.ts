@@ -6,6 +6,7 @@ import { Minimatch, IMinimatch } from "minimatch";
 interface MatchConfig {
   all?: string[];
   any?: string[];
+  branch?: string | string[];
 }
 
 type StringOrMatchConfig = string | MatchConfig;
@@ -69,6 +70,15 @@ function getPrNumber(): number | undefined {
   }
 
   return pullRequest.number;
+}
+
+function getBranchName(): string | undefined {
+  const pullRequest = github.context.payload.pull_request;
+  if (!pullRequest) {
+    return undefined;
+  }
+
+  return pullRequest.head?.ref;
 }
 
 async function getChangedFiles(
@@ -213,6 +223,42 @@ function checkAll(changedFiles: string[], globs: string[]): boolean {
   return true;
 }
 
+function matchBranchPattern(matcher: IMinimatch, branchName: string): boolean {
+  core.debug(`  - ${printPattern(matcher)}`);
+  if (matcher.match(branchName)) {
+    core.debug(`   "branch" pattern matched`);
+    return true;
+  }
+
+  core.debug(`   ${printPattern(matcher)} did not match`);
+  return false;
+}
+
+function checkBranch(glob: string | string[]): boolean {
+  const branchName = getBranchName();
+  if (!branchName) {
+    core.debug(` no branch name`);
+    return false;
+  }
+
+  core.debug(` checking "branch" pattern against ${branchName}`);
+  if (Array.isArray(glob)) {
+    const matchers = glob.map((g) => new Minimatch(g));
+    for (const matcher of matchers) {
+      if (matchBranchPattern(matcher, branchName)) {
+        core.debug(`  "branch" patterns matched against ${branchName}`);
+        return true;
+      }
+    }
+
+    core.debug(`  "branch" patterns did not match against ${branchName}`);
+    return false;
+  } else {
+    const matcher = new Minimatch(glob);
+    return matchBranchPattern(matcher, branchName);
+  }
+}
+
 function checkMatch(changedFiles: string[], matchConfig: MatchConfig): boolean {
   if (matchConfig.all !== undefined) {
     if (!checkAll(changedFiles, matchConfig.all)) {
@@ -222,6 +268,12 @@ function checkMatch(changedFiles: string[], matchConfig: MatchConfig): boolean {
 
   if (matchConfig.any !== undefined) {
     if (!checkAny(changedFiles, matchConfig.any)) {
+      return false;
+    }
+  }
+
+  if (matchConfig.branch !== undefined) {
+    if (!checkBranch(matchConfig.branch)) {
       return false;
     }
   }
